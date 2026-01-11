@@ -15,7 +15,7 @@ mixer.init()
 def load_icon():
     """Загружает иконку приложения для окна"""
     icon_paths = []
-    
+
     # Проверяем пути относительно исполняемого файла (для PyInstaller)
     if getattr(sys, 'frozen', False):
         # Запущено как собранное приложение
@@ -25,13 +25,13 @@ def load_icon():
         # Запущено из исходников - проверяем несколько возможных путей
         script_dir = os.path.dirname(os.path.abspath(__file__))
         project_root = os.path.dirname(os.path.dirname(script_dir))
-        
+
         icon_paths.extend([
             os.path.join(project_root, "resources", "icon.png"),
             os.path.join(script_dir, "..", "..", "resources", "icon.png"),
             os.path.join("resources", "icon.png"),
         ])
-    
+
     for path in icon_paths:
         if os.path.exists(path):
             try:
@@ -44,7 +44,7 @@ def load_icon():
             except Exception as e:
                 print(f"Не удалось загрузить иконку из {path}: {e}")
                 continue
-    
+
     # Если иконка не найдена, выводим предупреждение
     if not getattr(sys, 'frozen', False):
         print("⚠️  Иконка не найдена. Запустите scripts/create_icon.py для создания иконки.")
@@ -426,36 +426,157 @@ class PomodoroTimer:
         self._bg_notes = []
         # Крупные
         for _ in range(8):
+            vx = random.uniform(-80, 80) / 100.0
+            vy = random.uniform(-80, 80) / 100.0
             self._bg_notes.append({
                 'x': random.uniform(30, WIDTH - 30),
                 'y': random.uniform(30, HEIGHT - 30),
                 'size': random.uniform(26, 42),
                 'color': random.choice(self._bg_colors),
-                'vx': random.uniform(-15, 15) / 100.0,  # пикс/кадр ~ медленно
-                'vy': random.uniform(-10, 10) / 100.0,
+                'vx': vx,
+                'vy': vy,
+                'original_vx': vx,  # Сохраняем исходную скорость
+                'original_vy': vy,
             })
         # Мелкие
         for _ in range(18):
+            vx = random.uniform(-100, 100) / 100.0
+            vy = random.uniform(-100, 100) / 100.0
             self._bg_notes.append({
                 'x': random.uniform(20, WIDTH - 20),
                 'y': random.uniform(20, HEIGHT - 20),
                 'size': random.uniform(12, 20),
                 'color': random.choice(self._bg_colors),
-                'vx': random.uniform(-20, 20) / 100.0,
-                'vy': random.uniform(-15, 15) / 100.0,
+                'vx': vx,
+                'vy': vy,
+                'original_vx': vx,  # Сохраняем исходную скорость
+                'original_vy': vy,
             })
 
     def _update_background_notes(self, dt):
-        """Обновляет позиции нот; мягкое движение и обёртка по краям"""
-        speed_scale = 12.0  # базовый множитель скорости (px/сек)
+        """Обновляет позиции нот с физикой столкновений и отскоков от краев"""
+        speed_scale = 50.0  # Увеличенный множитель скорости (px/сек)
+
+        # Получаем позицию курсора
+        mouse_pos = pygame.mouse.get_pos()
+        mouse_x, mouse_y = mouse_pos
+        cursor_radius = 30  # Радиус влияния курсора
+        repulsion_strength = 150.0  # Сила отталкивания от курсора
+
+        # Коэффициент плавного возвращения к исходной скорости
+        # За 6 секунд скорость вернется примерно на 95% к исходной
+        restore_factor = 0.5  # Скорость восстановления (0.5 = медленно, 2.0 = быстро)
+
+        # Обновляем позиции
         for n in self._bg_notes:
             n['x'] += n['vx'] * speed_scale * dt
             n['y'] += n['vy'] * speed_scale * dt
-            # Обёртка
-            if n['x'] < -40: n['x'] = WIDTH + 40
-            if n['x'] > WIDTH + 40: n['x'] = -40
-            if n['y'] < -40: n['y'] = HEIGHT + 40
-            if n['y'] > HEIGHT + 40: n['y'] = -40
+
+            # Отталкивание от курсора
+            dx_cursor = n['x'] - mouse_x
+            dy_cursor = n['y'] - mouse_y
+            distance_cursor = math.sqrt(dx_cursor * dx_cursor + dy_cursor * dy_cursor)
+
+            if distance_cursor < cursor_radius and distance_cursor > 0:
+                # Нормализуем вектор от курсора к ноте
+                nx_cursor = dx_cursor / distance_cursor
+                ny_cursor = dy_cursor / distance_cursor
+
+                # Сила отталкивания обратно пропорциональна расстоянию
+                force = repulsion_strength * (1 - distance_cursor / cursor_radius)
+
+                # Применяем силу к скорости
+                n['vx'] += nx_cursor * force * dt
+                n['vy'] += ny_cursor * force * dt
+
+            # Плавное возвращение к исходной скорости (демпфирование к target velocity)
+            # Используем экспоненциальное сглаживание
+            damping = 1.0 - math.exp(-restore_factor * dt)
+            n['vx'] += (n['original_vx'] - n['vx']) * damping
+            n['vy'] += (n['original_vy'] - n['vy']) * damping
+
+            # Отскок от краев окна
+            radius = n['size'] * 0.5
+            if n['x'] - radius < 0:
+                n['x'] = radius
+                n['vx'] = abs(n['vx'])  # Отскок вправо
+                n['original_vx'] = abs(n['original_vx'])  # Обновляем исходную скорость
+            elif n['x'] + radius > WIDTH:
+                n['x'] = WIDTH - radius
+                n['vx'] = -abs(n['vx'])  # Отскок влево
+                n['original_vx'] = -abs(n['original_vx'])  # Обновляем исходную скорость
+
+            if n['y'] - radius < 0:
+                n['y'] = radius
+                n['vy'] = abs(n['vy'])  # Отскок вниз
+                n['original_vy'] = abs(n['original_vy'])  # Обновляем исходную скорость
+            elif n['y'] + radius > HEIGHT:
+                n['y'] = HEIGHT - radius
+                n['vy'] = -abs(n['vy'])  # Отскок вверх
+                n['original_vy'] = -abs(n['original_vy'])  # Обновляем исходную скорость
+
+        # Проверка столкновений между нотами
+        for i in range(len(self._bg_notes)):
+            for j in range(i + 1, len(self._bg_notes)):
+                n1 = self._bg_notes[i]
+                n2 = self._bg_notes[j]
+
+                # Расстояние между центрами
+                dx = n2['x'] - n1['x']
+                dy = n2['y'] - n1['y']
+                distance = math.sqrt(dx * dx + dy * dy)
+
+                # Радиусы столкновения
+                r1 = n1['size'] * 0.5
+                r2 = n2['size'] * 0.5
+                min_distance = r1 + r2
+
+                if distance < min_distance and distance > 0:
+                    # Нормализация вектора
+                    nx = dx / distance
+                    ny = dy / distance
+
+                    # Отталкивание - перемещаем ноты так, чтобы они не пересекались
+                    overlap = min_distance - distance
+                    n1['x'] -= nx * overlap * 0.5
+                    n1['y'] -= ny * overlap * 0.5
+                    n2['x'] += nx * overlap * 0.5
+                    n2['y'] += ny * overlap * 0.5
+
+                    # Отражение скоростей относительно нормали столкновения
+                    # Сохраняем модуль скорости каждой ноты, меняем только направление
+                    # Проверяем, сближаются ли ноты (относительная скорость направлена навстречу)
+                    relative_vx = n2['vx'] - n1['vx']
+                    relative_vy = n2['vy'] - n1['vy']
+                    dot_relative = relative_vx * nx + relative_vy * ny
+
+                    # Отражаем только если сближаются
+                    if dot_relative < 0:
+                        # Сохраняем модули скоростей
+                        speed1 = math.sqrt(n1['vx']**2 + n1['vy']**2)
+                        speed2 = math.sqrt(n2['vx']**2 + n2['vy']**2)
+
+                        # Проекция скорости n1 на нормаль
+                        dot1 = n1['vx'] * nx + n1['vy'] * ny
+                        # Отражение: вычитаем двойную проекцию
+                        n1['vx'] -= 2 * dot1 * nx
+                        n1['vy'] -= 2 * dot1 * ny
+
+                        # Проекция скорости n2 на нормаль
+                        dot2 = n2['vx'] * nx + n2['vy'] * ny
+                        # Отражение: вычитаем двойную проекцию
+                        n2['vx'] -= 2 * dot2 * nx
+                        n2['vy'] -= 2 * dot2 * ny
+
+                        # Восстанавливаем исходные модули скоростей (на случай погрешностей)
+                        new_speed1 = math.sqrt(n1['vx']**2 + n1['vy']**2)
+                        new_speed2 = math.sqrt(n2['vx']**2 + n2['vy']**2)
+                        if new_speed1 > 0:
+                            n1['vx'] = n1['vx'] * speed1 / new_speed1
+                            n1['vy'] = n1['vy'] * speed1 / new_speed1
+                        if new_speed2 > 0:
+                            n2['vx'] = n2['vx'] * speed2 / new_speed2
+                            n2['vy'] = n2['vy'] * speed2 / new_speed2
 
     def draw_stars(self, screen):
         """Рендерит фоновые ноты с альфой"""
@@ -467,19 +588,19 @@ class PomodoroTimer:
     def draw_violin_key(self, screen, x, y, size, color):
         """Рисует скрипичный ключ (treble clef)"""
         import math
-        
+
         line_width = 2
-        
+
         # Рисуем скрипичный ключ через серию точек, образующих изогнутую линию
         points = []
-        
+
         # Нижняя часть (хвост)
         for i in range(10):
             t = i / 9.0
             px = x - size * 0.2 * (1 - t)
             py = y + size * 0.8 + size * 0.4 * t
             points.append((px, py))
-        
+
         # Подъём вверх
         for i in range(8):
             t = i / 7.0
@@ -487,7 +608,7 @@ class PomodoroTimer:
             px = x + size * 0.3 * math.cos(angle)
             py = y + size * 0.5 - size * 0.3 * math.sin(angle)
             points.append((px, py))
-        
+
         # Верхняя петля (правая часть)
         for i in range(12):
             t = i / 11.0
@@ -495,7 +616,7 @@ class PomodoroTimer:
             px = x + size * 0.4 * math.cos(angle)
             py = y - size * 0.2 + size * 0.5 * math.sin(angle)
             points.append((px, py))
-        
+
         # Средняя часть и нижняя петля
         for i in range(15):
             t = i / 14.0
@@ -503,7 +624,7 @@ class PomodoroTimer:
             px = x + size * 0.35 * math.cos(angle)
             py = y + size * 0.2 + size * 0.4 * math.sin(angle)
             points.append((px, py))
-        
+
         # Рисуем линию через все точки
         for i in range(len(points) - 1):
             pygame.draw.line(screen, color, points[i], points[i + 1], line_width)
@@ -522,8 +643,9 @@ class PomodoroTimer:
         # Стебель: от правого края эллипса вверх
         stem_width = 2
         stem_height = int(round(size * 0.8))
-        stem_x = note_rect.right - 1  # правая граница эллипса
-        stem_y_top = note_rect.top
+        # Правый край эллипса, но внутри него (сдвиг на 3-4 пикселя влево)
+        stem_x = note_rect.right - 2
+        stem_y_top = note_rect.top + 4  # Чуть ниже верхнего края для плавного соединения
         pygame.draw.line(screen, color, (stem_x, stem_y_top), (stem_x, stem_y_top - stem_height), stem_width)
 
     def format_time(self, seconds):
