@@ -154,6 +154,9 @@ tick_sound = create_tick_sound()
 
 class Settings:
     def __init__(self):
+        self.config_file = os.path.expanduser("~/.pomodoro_timer_settings.json")
+
+        # Значения по умолчанию
         self.work_time = 25  # минуты
         self.short_break = 5  # минуты
         self.long_break = 15  # минуты
@@ -162,6 +165,43 @@ class Settings:
         self.show_settings = False
         self.font = pygame.font.SysFont('Arial', 24)
         self.small_font = pygame.font.SysFont('Arial', 18)
+
+        # Загружаем настройки из файла
+        self.load_settings()
+
+    def load_settings(self):
+        """Загружает настройки из файла"""
+        try:
+            if os.path.exists(self.config_file):
+                import json
+                with open(self.config_file, 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                    self.work_time = data.get('work_time', 25)
+                    self.short_break = data.get('short_break', 5)
+                    self.long_break = data.get('long_break', 15)
+                    self.metronome_enabled = data.get('metronome_enabled', True)
+                    self.metronome_interval = data.get('metronome_interval', 1.0)
+                    print(f"✓ Настройки загружены из {self.config_file}")
+        except Exception as e:
+            print(f"⚠️  Ошибка загрузки настроек: {e}")
+            # Используем значения по умолчанию
+
+    def save_settings(self):
+        """Сохраняет настройки в файл"""
+        try:
+            import json
+            data = {
+                'work_time': self.work_time,
+                'short_break': self.short_break,
+                'long_break': self.long_break,
+                'metronome_enabled': self.metronome_enabled,
+                'metronome_interval': self.metronome_interval,
+            }
+            with open(self.config_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+            print(f"✓ Настройки сохранены в {self.config_file}")
+        except Exception as e:
+            print(f"⚠️  Ошибка сохранения настроек: {e}")
 
     def get_work_time_seconds(self):
         return self.work_time * 60
@@ -285,38 +325,46 @@ class Settings:
         if not buttons:
             return False
 
+        changed = False
+
         if buttons['work_minus'].collidepoint(mouse_pos) and self.work_time > 1:
             self.work_time -= 1
-            return True
+            changed = True
         elif buttons['work_plus'].collidepoint(mouse_pos) and self.work_time < 60:
             self.work_time += 1
-            return True
+            changed = True
         elif buttons['short_minus'].collidepoint(mouse_pos) and self.short_break > 1:
             self.short_break -= 1
-            return True
+            changed = True
         elif buttons['short_plus'].collidepoint(mouse_pos) and self.short_break < 30:
             self.short_break += 1
-            return True
+            changed = True
         elif buttons['long_minus'].collidepoint(mouse_pos) and self.long_break > 5:
             self.long_break -= 1
-            return True
+            changed = True
         elif buttons['long_plus'].collidepoint(mouse_pos) and self.long_break < 30:
             self.long_break += 1
-            return True
+            changed = True
         elif 'metro_toggle' in buttons and buttons['metro_toggle'].collidepoint(mouse_pos):
             self.metronome_enabled = not self.metronome_enabled
-            return True
+            changed = True
         elif 'interval_minus' in buttons and buttons['interval_minus'].collidepoint(mouse_pos):
             self.metronome_interval = max(0.3, round(self.metronome_interval - 0.1, 1))
-            return True
+            changed = True
         elif 'interval_plus' in buttons and buttons['interval_plus'].collidepoint(mouse_pos):
             self.metronome_interval = min(2.0, round(self.metronome_interval + 0.1, 1))
-            return True
+            changed = True
         elif buttons['close_button'].collidepoint(mouse_pos):
             self.show_settings = False
+            # Сохраняем настройки при закрытии окна
+            self.save_settings()
             return True
 
-        return False
+        # Сохраняем настройки при любом изменении
+        if changed:
+            self.save_settings()
+
+        return changed
 
 class PomodoroTimer:
     def __init__(self, settings):
@@ -630,23 +678,75 @@ class PomodoroTimer:
             pygame.draw.line(screen, color, points[i], points[i + 1], line_width)
 
     def draw_note(self, screen, x, y, size, color):
-        """Рисует музыкальную ноту. Стебель привязан к эллипсу, чтобы не расходился."""
-        # Приводим координаты к int один раз, чтобы линия и эллипс совпадали по пикселям
-        rect_x = int(round(x - size * 0.3))
-        rect_y = int(round(y - size * 0.2))
-        rect_w = int(round(size * 0.6))
-        rect_h = int(round(size * 0.4))
+        """Рисует музыкальную ноту с антиалиасингом"""
+        try:
+            from pygame import gfxdraw
 
-        note_rect = pygame.Rect(rect_x, rect_y, rect_w, rect_h)
-        pygame.draw.ellipse(screen, color, note_rect)
+            # Преобразуем цвет - убираем альфа-канал для gfxdraw
+            if len(color) == 4:
+                draw_color = color[:3]  # Берём только RGB
+                alpha = color[3]
+            else:
+                draw_color = color
+                alpha = 255
 
-        # Стебель: от правого края эллипса вверх
-        stem_width = 2
-        stem_height = int(round(size * 0.8))
-        # Правый край эллипса, но внутри него (сдвиг на 3-4 пикселя влево)
-        stem_x = note_rect.right - 2
-        stem_y_top = note_rect.top + 4  # Чуть ниже верхнего края для плавного соединения
-        pygame.draw.line(screen, color, (stem_x, stem_y_top), (stem_x, stem_y_top - stem_height), stem_width)
+            # Координаты для эллипса (головки ноты)
+            center_x = int(round(x))
+            center_y = int(round(y))
+            rx = int(round(size * 0.3))  # радиус по X
+            ry = int(round(size * 0.2))  # радиус по Y
+
+            # Если есть альфа, рисуем на отдельной поверхности
+            if alpha < 255:
+                temp_surf = pygame.Surface((rx*2 + 10, ry*2 + stem_height + 10), pygame.SRCALPHA)
+                temp_center_x = rx + 5
+                temp_center_y = ry + 5
+
+                gfxdraw.filled_ellipse(temp_surf, temp_center_x, temp_center_y, rx, ry, color)
+                gfxdraw.aaellipse(temp_surf, temp_center_x, temp_center_y, rx, ry, color)
+
+                # Стебель
+                stem_width = 2
+                stem_height = int(round(size * 0.8))
+                stem_x = temp_center_x + rx - 2
+                stem_y_top = temp_center_y - ry + 4
+                for offset in range(stem_width):
+                    pygame.draw.aaline(temp_surf, color,
+                                     (stem_x + offset, stem_y_top),
+                                     (stem_x + offset, stem_y_top - stem_height))
+
+                screen.blit(temp_surf, (center_x - rx - 5, center_y - ry - 5))
+            else:
+                # Рисуем заполненный эллипс с антиалиасингом
+                gfxdraw.filled_ellipse(screen, center_x, center_y, rx, ry, draw_color)
+                gfxdraw.aaellipse(screen, center_x, center_y, rx, ry, draw_color)
+
+                # Стебель: от правого края эллипса вверх
+                stem_width = 2
+                stem_height = int(round(size * 0.8))
+                stem_x = center_x + rx - 2
+                stem_y_top = center_y - ry + 4
+
+                # Рисуем стебель с антиалиасингом (толстая линия через несколько тонких)
+                for offset in range(stem_width):
+                    pygame.draw.aaline(screen, draw_color,
+                                     (stem_x + offset, stem_y_top),
+                                     (stem_x + offset, stem_y_top - stem_height))
+        except Exception as e:
+            # Fallback на обычное рисование
+            rect_x = int(round(x - size * 0.3))
+            rect_y = int(round(y - size * 0.2))
+            rect_w = int(round(size * 0.6))
+            rect_h = int(round(size * 0.4))
+
+            note_rect = pygame.Rect(rect_x, rect_y, rect_w, rect_h)
+            pygame.draw.ellipse(screen, color, note_rect)
+
+            stem_width = 2
+            stem_height = int(round(size * 0.8))
+            stem_x = note_rect.right - 2
+            stem_y_top = note_rect.top + 4
+            pygame.draw.line(screen, color, (stem_x, stem_y_top), (stem_x, stem_y_top - stem_height), stem_width)
 
     def format_time(self, seconds):
         minutes = seconds // 60
@@ -673,7 +773,7 @@ class PomodoroTimer:
         pygame.draw.circle(screen, WHITE, center, radius + 5)
         pygame.draw.circle(screen, BUTTON_SHADOW, center, radius + 5, 2)
 
-        # Прогресс (дуга)
+        # Прогресс (дуга) - рисуем через полигон
         if progress > 0:
             end_angle = -90 + (360 * progress)
             points = [center]
@@ -683,7 +783,7 @@ class PomodoroTimer:
                 y = center[1] + int(radius * -pygame.math.Vector2(0, 1).rotate(angle).y)
                 points.append((x, y))
             if len(points) > 2:
-                pygame.draw.polygon(screen, accent_color + (30,) if len(accent_color) == 3 else accent_color, points)
+                pygame.draw.polygon(screen, accent_color, points)
 
         # Внутренняя белая окружность
         pygame.draw.circle(screen, WHITE, center, radius - 8)
@@ -721,7 +821,9 @@ class PomodoroTimer:
 
         # Кнопка настроек (в углу)
         settings_button_rect = pygame.Rect(WIDTH - 70, 20, 55, 45)
-        self.draw_modern_button(screen, settings_button_rect, "SET", BUTTON_BG, TEXT_COLOR, border=True, small=True)
+        # Используем более светлый цвет для шестерёнки
+        gear_color = (150, 150, 160)  # Светло-серый вместо TEXT_COLOR
+        self.draw_modern_button(screen, settings_button_rect, "", BUTTON_BG, gear_color, border=True, small=True, is_gear=True)
 
         # Отображаем настройки поверх всего если они открыты
         if self.settings.show_settings:
@@ -732,7 +834,71 @@ class PomodoroTimer:
         # Возвращаем rect'ы кнопок для обработки кликов
         return start_button_rect, reset_button_rect, settings_button_rect
 
-    def draw_modern_button(self, screen, rect, text, bg_color, text_color, border=False, small=False):
+    def draw_gear_icon(self, screen, x, y, size, color):
+        """Рисует иконку шестерёнки с антиалиасингом"""
+        import math
+
+        center_x, center_y = int(x), int(y)
+        outer_radius = size
+        inner_radius = size * 0.7
+        hole_radius = size * 0.35
+        num_teeth = 8
+        tooth_width = 0.35  # Ширина зуба в радианах
+
+        # Создаём точки для зубцов шестерёнки
+        points = []
+        angle_step = 2 * math.pi / num_teeth
+
+        for i in range(num_teeth):
+            base_angle = i * angle_step - math.pi / 2
+
+            # Левая сторона зуба (внешняя)
+            angle1 = base_angle - tooth_width / 2
+            px1 = center_x + outer_radius * math.cos(angle1)
+            py1 = center_y + outer_radius * math.sin(angle1)
+            points.append((px1, py1))
+
+            # Правая сторона зуба (внешняя)
+            angle2 = base_angle + tooth_width / 2
+            px2 = center_x + outer_radius * math.cos(angle2)
+            py2 = center_y + outer_radius * math.sin(angle2)
+            points.append((px2, py2))
+
+            # Переход к впадине (внутренний радиус)
+            angle3 = base_angle + tooth_width / 2
+            px3 = center_x + inner_radius * math.cos(angle3)
+            py3 = center_y + inner_radius * math.sin(angle3)
+            points.append((px3, py3))
+
+            # Впадина между зубцами
+            angle4 = base_angle + angle_step - tooth_width / 2
+            px4 = center_x + inner_radius * math.cos(angle4)
+            py4 = center_y + inner_radius * math.sin(angle4)
+            points.append((px4, py4))
+
+        # Рисуем шестерёнку с антиалиасингом
+        if len(points) >= 3:
+            # Используем gfxdraw для сглаживания
+            try:
+                from pygame import gfxdraw
+                # Рисуем заполненный полигон
+                gfxdraw.filled_polygon(screen, points, color)
+                # Рисуем сглаженный контур
+                gfxdraw.aapolygon(screen, points, color)
+            except:
+                # Fallback если gfxdraw недоступен
+                pygame.draw.polygon(screen, color, points)
+
+        # Рисуем центральное отверстие (круг) с антиалиасингом
+        try:
+            from pygame import gfxdraw
+            gfxdraw.filled_circle(screen, center_x, center_y, int(hole_radius), BUTTON_BG)
+            gfxdraw.aacircle(screen, center_x, center_y, int(hole_radius), color)
+        except:
+            pygame.draw.circle(screen, BUTTON_BG, (center_x, center_y), int(hole_radius))
+            pygame.draw.circle(screen, color, (center_x, center_y), int(hole_radius), 1)
+
+    def draw_modern_button(self, screen, rect, text, bg_color, text_color, border=False, small=False, is_gear=False):
         """Рисует современную кнопку с тенью"""
         # Тень
         shadow_rect = rect.copy()
@@ -746,11 +912,17 @@ class PomodoroTimer:
         if border:
             pygame.draw.rect(screen, BUTTON_SHADOW, rect, 2, border_radius=12)
 
-        # Текст
-        font = self.small_font if small else self.button_font
-        text_surface = font.render(text, True, text_color)
-        text_rect = text_surface.get_rect(center=rect.center)
-        screen.blit(text_surface, text_rect)
+        # Рисуем шестерёнку или текст
+        if is_gear:
+            # Рисуем иконку шестерёнки
+            gear_size = 12
+            self.draw_gear_icon(screen, rect.centerx, rect.centery, gear_size, text_color)
+        else:
+            # Текст
+            font = self.small_font if small else self.button_font
+            text_surface = font.render(text, True, text_color)
+            text_rect = text_surface.get_rect(center=rect.center)
+            screen.blit(text_surface, text_rect)
 
 def main():
     clock = pygame.time.Clock()
